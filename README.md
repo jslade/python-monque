@@ -10,30 +10,30 @@ Quick Start
 Define tasks in a module:
 
 In my_tasks.py:
-   from monque.task import Task
-   
-   class Add(Task):
-       def run(self, a, b):
-           return a + b
-   
-   class Subtract(Task):
-       def run(self, a, b):
-           return a - b
+    from monque.task import Task
+    
+    class Add(Task):
+        def run(self, a, b):
+            return a + b
+    
+    class Subtract(Task):
+        def run(self, a, b):
+            return a - b
 
 Submit tasks:
-   from monque import Monque
-   from my_tasks import *
-   
-   q = Monque()
-   
-   plus = Add().post([1,2])
-   minus = Subtract().post([1,2])
-   
-   print "result of plus:", plus.wait()
-   print "result of minus:", minus.wait()
+    from monque import Monque
+    from my_tasks import *
+    
+    q = Monque()
+    
+    plus = Add().post([1,2])
+    minus = Subtract().post([1,2])
+    
+    print "result of plus:", plus.wait()
+    print "result of minus:", minus.wait()
 
 Run a worker to consume the tasks from the queue:
-   python -m monque.worker --include my_tasks --verbose
+    python -m monque.worker --include my_tasks --verbose
 
 
 Why
