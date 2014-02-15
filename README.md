@@ -10,6 +10,7 @@ Quick Start
 Define tasks in a module:
 
 In my_tasks.py:
+
     from monque.task import Task
     
     class Add(Task):
@@ -21,6 +22,7 @@ In my_tasks.py:
             return a - b
 
 Submit tasks:
+
     from monque import Monque
     from my_tasks import *
     
@@ -33,6 +35,7 @@ Submit tasks:
     print "result of minus:", minus.wait()
 
 Run a worker to consume the tasks from the queue:
+
     python -m monque.worker --include my_tasks --verbose
 
 
