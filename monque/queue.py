@@ -453,7 +453,7 @@ class PostedTask(object):
         while expire_at is None or time.time() < expire_at:
             tail = self.monque.activity_log.find(query,
                                                  tailable=True,
-                                                 await_data=True)
+                                                 await_data=False)
             got = False
             for doc in tail:
                 got = True
