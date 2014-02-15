@@ -9,7 +9,7 @@ Quick Start
 
 Define tasks in a module:
 
-In my_tasks.py:
+In *my_tasks.py*:
 
     from monque.task import Task
     
@@ -34,10 +34,22 @@ Submit tasks:
     print "result of plus:", plus.wait()
     print "result of minus:", minus.wait()
 
-Run a worker to consume the tasks from the queue:
+Run a worker to consume the tasks from the queue, using the same *my_tasks* module:
 
     python -m monque.worker --include my_tasks --verbose
 
+By default, Monque will connect to the MongoDB instance on the
+localhost, using the standard port of 27017. Another host/port can be
+specified via the environment:
+
+    export MONQUE_MONGO_HOST=mongo.example.com:27020
+
+As an alternative, the mongo host/port can be given as arguments when instantiating the Monque class:
+
+    from monque import Monque
+    q = Monque('mongo.host'='mongo.example.com',
+               'mongo.port'=27020)
+ 
 
 Why
 ====================
