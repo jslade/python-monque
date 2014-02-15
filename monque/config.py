@@ -82,7 +82,7 @@ class Configuration(object):
         for k,v in os.environ.iteritems():
             if not k.startswith('MONQUE_'): continue
             cfg = k[7:].lower().replace('_','.')
-            print "environ[%s] --> %s = %s" % (k,cfg,v)
+            #print "environ[%s] --> %s = %s" % (k,cfg,v)
             self.set(cfg,v)
 
         return self
