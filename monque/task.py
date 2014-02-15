@@ -65,7 +65,7 @@ class Task(object):
         raise NotImplementedError()
         
 
-    def post(self,args,kwargs={},**config):
+    def post(self,args=[],kwargs={},**config):
         """
         Submit this task to the queue to be executed by a (remote) worker.
         Result is a TaskRemote instance that can be used to monitor progress and
