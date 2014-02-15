@@ -66,6 +66,27 @@ class Configuration(object):
 
         return self
 
+    def load_from_env(self):
+        """
+        Populate this config using environment variables.
+        Looks for everything matching MONQUE_*
+        Converts those all to config settings by:
+        - stripping the MONQUE_ prefix
+        - converting to lowercase
+        - replacing _ with .
+
+        For example: MONQUE_MONGO_HOST --> mongo.host
+        """
+
+        import os
+        for k,v in os.environ.iteritems():
+            if not k.startswith('MONQUE_'): continue
+            cfg = k[7:].lower().replace('_','.')
+            print "environ[%s] --> %s = %s" % (k,cfg,v)
+            self.set(cfg,v)
+
+        return self
+
         
     @classmethod
     def get_global(klass,db,collection_name='config'):

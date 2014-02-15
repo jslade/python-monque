@@ -21,7 +21,7 @@ class Monque(object):
         if type(self.logger) == types.StringType:
             self.logger = logging.getLogger(self.logger)
 
-        self.config = kwargs.pop('config',Configuration(**kwargs))
+        self.config = kwargs.pop('config',Configuration(**kwargs).load_from_env())
 
         self.setup_logging()
         self.connect()
@@ -46,7 +46,12 @@ class Monque(object):
     def connect(self):
         self.logger.debug("Monque.connect()")
         host = self.config.get('mongo.host','localhost')
-        port = int(self.config.get('mongo.port',27017))
+        if ':' in host:
+            host, port = host.split(':',1)
+            port = int(port)
+        else:
+            port = int(self.config.get('mongo.port',27017))
+
         db_name = self.config.get('mongo.db','monque')
 
         self.connection = pymongo.MongoClient(host,port)
