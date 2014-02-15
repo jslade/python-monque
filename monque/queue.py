@@ -274,6 +274,7 @@ class PostedTask(object):
         self.queue = self.config.get('queue','default')
 
         self.start_time = self.get_start_time()
+        self.result = None
 
         self.max_in_queue = int(self.config.get('max_in_queue',0))
         self.max_running = int(self.config.get('max_running',0))
@@ -462,10 +463,27 @@ class PostedTask(object):
 
             time.sleep(.1)
 
-        full_result = self.monque.results_collection.find_one(self.id)
-        if full_result:
-            return full_result['result']
+        result = self.monque.results_collection.find_one(self.id)
+        if result:
+            return self.handle_result(result)
 
         return None
         
-    
+    def handle_result(self,result):
+        self.result = result
+
+        status = self.result.get('status',None)
+
+        if status == 'completed':
+            return self.result['result']
+
+        elif status == 'failed':
+            exception = self.result['exception']
+            raise PostedTask.RuntimeException(exception)
+
+
+    class RuntimeException(Exception):
+        pass
+
+
+

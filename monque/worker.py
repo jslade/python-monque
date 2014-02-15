@@ -445,6 +445,8 @@ class Worker(Monque):
         
         posted_task.save_into(self.results_collection)
 
+        posted_task.notify_results(self.activity_log)
+
 
     def activity_loop(self):
         """
@@ -609,8 +611,10 @@ class WorkerMain(object):
         op.add_option('--name', type='string', dest='name')
         op.add_option('--verbose', action='store_true', dest='verbose')
         op.add_option('--queue', type='string',action='append', dest='queues')
-        op.add_option('--include', type='string', action='append', dest='includes')
-        op.add_option('--include-dir', type='string', action='append', dest='include_dirs')
+        op.add_option('--include', type='string', action='append', dest='includes',
+                      default=[])
+        op.add_option('--include-dir', type='string', action='append', dest='include_dirs',
+                      default=[])
         op.add_option('--control', type='string', dest='control_msg')
 
         self.options, self.args = op.parse_args(args)
