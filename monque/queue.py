@@ -26,6 +26,8 @@ class Monque(object):
         self.setup_logging()
         self.connect()
 
+        self.posted_count = 0
+
         monque.instance.current_instance = self
 
 
@@ -140,7 +142,7 @@ class Monque(object):
 
     def post(self,task,args,kwargs,config):
         """
-        Add a task to the queue.
+        Add a task to the queue. This is not typically called directly, but rather via Task.post()
         """
 
         post = PostedTask(self,task,args,kwargs,config)
@@ -164,7 +166,8 @@ class Monque(object):
 
         self.logger.info("Posted id=%s task=%s args=%s kwargs=%s" %
                          (post.id,post.name,post.args,post.kwargs))
-                
+
+        self.posted_count += 1
         return post
 
 
@@ -209,6 +212,10 @@ class Monque(object):
                                                                  'paused':False}},
                                                         upsert=True)
                 
+
+    def count_posted(self):
+        return self.posted_count
+
 
     def count_pending(self,queue=None,queues=None):
         query = {'status':'pending'}
