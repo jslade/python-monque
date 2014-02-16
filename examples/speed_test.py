@@ -14,8 +14,11 @@ Interrupt with Ctrl-C to end the test.
 
 One or more workers should also be started to consume/execute the tasks:
 
-   python -m monque.worker --include speed_test --queue speed_test
+    python -m monque.worker --include speed_test --queue speed_test
 
+Test pausing / resuming the queue while the workers are running:
+
+    python -m monque.worker --control [pause|resume] --queue speed_test
 
 """
 

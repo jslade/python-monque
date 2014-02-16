@@ -187,31 +187,70 @@ class Monque(object):
         """
         This is intended to be used from WorkerMain to broadcast control messages to 
         all workers (or all workers for specific queues).
+        
+        It can also be used from a client, however, to control the state of the queues it 
+        is connected to.
         """
-
-        msg = { 'command': command }
 
         queues = self.queues or ['*']
         for queue in queues:
-            msg['queue'] = queue
+            msg = { 'command': command, 'queue': queue }
             self.logger.warning("Sending control message: %s" % (msg))
             self.control_log.insert(msg)
 
-            if 'command' == 'pause':
-                self.control_collection.find_and_modify({'name':'paused',
-                                                         'queue':queue},
-                                                        {'$set':{'name':'paused',
-                                                                 'queue':queue,
-                                                                 'paused':True}},
-                                                        upsert=True)
-            elif command == 'resume':
-                self.control_collection.find_and_modify({'name':'paused',
-                                                         'queue':queue},
-                                                        {'$set':{'name':'paused',
-                                                                 'queue':queue,
-                                                                 'paused':False}},
-                                                        upsert=True)
-                
+            self.update_control_state(queue,command)
+
+
+    def update_control_state(self,queue,command):
+        """
+        The pause command will cause all workers to stop executing jobs, but they
+        will continue to run, waiting for the signal to resume.
+
+        The stop command will cause all workers to terminate, and it will prevent
+        any new workers from starting up until the resume signal is given.
+
+        The resume command un-pauses any paused workers, as well as allowing new
+        workers to start up (depending on some other mechanism to spawn them)
+        """
+
+        if command == 'pause':
+            obj = self.control_collection.find_and_modify({'name':'paused',
+                                                           'queue':queue},
+                                                          {'$set':{'name':'paused',
+                                                                   'queue':queue,
+                                                                   'paused':True}},
+                                                          upsert=True,new=True)
+            self.logger.debug("after pause: %s" % (obj))
+
+        elif command == 'resume':
+            obj = self.control_collection.find_and_modify({'name':'paused',
+                                                           'queue':queue},
+                                                          {'$set':{'name':'paused',
+                                                                   'queue':queue,
+                                                                   'paused':False}},
+                                                          upsert=True,new=True)
+            self.logger.debug("after resume: %s" % (obj))
+
+            obj = self.control_collection.find_and_modify({'name':'stopped',
+                                                           'queue':queue},
+                                                          {'$set':{'name':'stopped',
+                                                                   'queue':queue,
+                                                                   'stopped':False}},
+                                                          upsert=True,new=True)
+            self.logger.debug("after un-stop: %s" % (obj))
+
+        elif command == 'stop':
+            obj = self.control_collection.find_and_modify({'name':'stopped',
+                                                           'queue':queue},
+                                                          {'$set':{'name':'stopped',
+                                                                   'queue':queue,
+                                                                   'stopped':True}},
+                                                          upsert=True,new=True)
+            self.logger.debug("after stop: %s" % (obj))
+
+        else:
+            self.logger.error("Unrecongized control message: %s" % (msg))
+
 
     def count_posted(self):
         return self.posted_count

@@ -48,9 +48,10 @@ class Worker(Monque):
 
         self.lock = threading.Condition(threading.RLock())
 
-        # A thread to consume and exec tasks:
-        self.task_thread = threading.Thread(target=self.task_loop,name='task_loop')
-        self.task_thread.daemon = True
+        self.control_initialized = False
+        self.running = False
+        self.paused = False
+        self.throttled = False
 
         # A thread to monitor new activity in the queues:
         self.activity_thread = threading.Thread(target=self.activity_loop,name='activity_loop')
@@ -60,9 +61,9 @@ class Worker(Monque):
         self.control_thread = threading.Thread(target=self.control_loop,name='control_loop')
         self.control_thread.daemon = True
 
-        self.running = False
-        self.paused = False
-        self.throttled = False
+        # A thread to consume and exec tasks:
+        self.task_thread = threading.Thread(target=self.task_loop,name='task_loop')
+        self.task_thread.daemon = True
 
         self.current_workers_update_interval = float(self.config.get('worker.update_interval',30))
         self.wait_interval = float(self.config.get('worker.wait_interval',10))
@@ -98,16 +99,24 @@ class Worker(Monque):
         try:
             self.main_loop()
         except KeyboardInterrupt:
-            self.logger.warning("%s: run() iterrupted" % (self.worker_name))
+            self.logger.warning("%s: run() interrupted" % (self.worker_name))
         finally:
             self.running = False
             with self.lock:
                 self.lock.notifyAll()
 
         self.logger.info("%s: run() ended" % (self.worker_name))
-        
+
+        self.logger.debug("%s: waiting for control_thread" % (self.worker_name))
+        with self.lock: self.lock.notifyAll()
         self.control_thread.join()
+
+        self.logger.debug("%s: waiting for activity_thread" % (self.worker_name))
+        with self.lock: self.lock.notifyAll()
         self.activity_thread.join()
+
+        self.logger.debug("%s: waiting for task_thread" % (self.worker_name))
+        with self.lock: self.lock.notifyAll()
         self.task_thread.join()
 
         self.logger.info("%s: run() exiting" % (self.worker_name))
@@ -181,8 +190,6 @@ class Worker(Monque):
         Main loop for the worker, runs in the 'main' thread.
         Creates threads to consume workers, and then waits indefinitely.
         """
-
-        self.check_control_state()
 
         last_update = 0
 
@@ -282,6 +289,10 @@ class Worker(Monque):
         Loop in which the worker waits for a task to be available, then executes it
         """
         self.logger.debug("%s: task_loop() start" % (self.worker_name))
+
+        while not self.control_initialized:
+            with self.lock:
+                self.lock.wait()
 
         while self.running:
             # Poll for the next task, then execute it
@@ -510,6 +521,10 @@ class Worker(Monque):
             else:
                 self.resume()
 
+        elif state['name'] == 'stopped':
+            if state['stopped']:
+                self.stop()
+
 
     def control_loop(self):
         """
@@ -517,23 +532,26 @@ class Worker(Monque):
         """
         self.logger.debug("%s: control_loop() start" % (self.worker_name))
 
+        self.check_control_state()
+
         last_id = None
         for latest in self.control_log.find().sort([('$natural',-1)]).limit(1):
             last_id = latest['_id']
 
+        with self.lock:
+            self.control_initialized = True
+            self.lock.notifyAll()
+
         while self.running:
             # Tailable cursor for control log, to quickly know when new control messages are available
+            # By default, monitors the special queue name '*'
             query = {'queue': '*'}
 
             if last_id:
                 query['_id'] = {'$gt':last_id}
 
             if self.queues:
-                if len(self.queues) == 1:
-                    query['queue'] == {'$or': ['*', self.queues[0]]}
-                else:
-                    query['queue'] = {'$or': ['*', {'$in':self.queues}]}
-            
+                query['queue'] = {'$in':['*'] + self.queues}
 
             tail = self.control_log.find(query,
                                          tailable=True,
@@ -576,21 +594,22 @@ class Worker(Monque):
     def pause(self):
         if not self.paused:
             self.paused = True
-            self.logger.info("%s: PAUSED" % (self.worker_name))
+            self.logger.warning("%s: PAUSED -- issue the 'resume' command to continue" % (self.worker_name))
             with self.lock:
                 self.lock.notifyAll()
 
     def resume(self):
         if self.paused:
             self.paused = False
-            self.logger.info("%s: RESUMED" % (self.worker_name))
+            self.logger.warning("%s: RESUMED" % (self.worker_name))
             with self.lock:
                 self.lock.notifyAll()
 
     def stop(self):
         if self.running:
             self.running = False
-            self.logger.ingo("%s: STOPPED" % (self.worker_name))
+            self.logger.warning("%s: STOPPED -- issue the 'resume' command before starting workers" %
+                                (self.worker_name))
             with self.lock:
                 self.lock.notifyAll()
         
