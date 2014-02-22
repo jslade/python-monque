@@ -31,8 +31,8 @@ class Worker(Monque):
     def __init__(self,**kwargs):
         super(Worker,self).__init__(**kwargs)
 
-        self.started_at = datetime.datetime.now()
-        self.idle_since = datetime.datetime.now()
+        self.started_at = datetime.datetime.utcnow()
+        self.idle_since = datetime.datetime.utcnow()
 
         self.worker_name = kwargs.pop('name',None)
         if not self.worker_name:
@@ -101,9 +101,7 @@ class Worker(Monque):
         except KeyboardInterrupt:
             self.logger.warning("%s: run() interrupted" % (self.worker_name))
         finally:
-            self.running = False
-            with self.lock:
-                self.lock.notifyAll()
+            self.stop_running()
 
         self.logger.info("%s: run() ended" % (self.worker_name))
 
@@ -188,7 +186,8 @@ class Worker(Monque):
     def main_loop(self):
         """
         Main loop for the worker, runs in the 'main' thread.
-        Creates threads to consume workers, and then waits indefinitely.
+        Just waits indefinitely while the task thread consumes tasks,
+        and checks if timeout or other limits are reached.
         """
 
         last_update = 0
@@ -197,15 +196,17 @@ class Worker(Monque):
             # Poll for a task:
             # Actually, just signal the lock so the other thread wakes
             # up to do the polling:
+            # So this lock.wait() will stop either when the wait_interval is reached,
+            # or when the lock is signaled from another thread -- which will happen
+            # each time a task is run. So this loop may execute very frequently, if there
+            # are pending tasks in the queue. Therefore, the loop should be pretty short.
             with self.lock:
                 self.lock.wait(self.wait_interval)
 
             # After waking up, check if timeout conditions are reached
             if self.check_timeout():
                 self.logger.warning("%s: run() finishing on timeout" % (self.worker_name))
-                self.running = False
-                with self.lock:
-                    self.lock.notifyAll()
+                self.stop_running()
 
             # Periodically update the "current workers" record
             last_update = self.update_current_workers(last_update)
@@ -243,7 +244,7 @@ class Worker(Monque):
 
         if self.max_idle_time and not current:
             # Use current idle time, not total
-            idle_time = datetime.datetime.now() - self.idle_since
+            idle_time = datetime.datetime.utcnow() - self.idle_since
             if idle_time >= self.max_idle_time:
                 self.logger.warning("%s: worker reached max_idle_time (%s)" %
                                     (self.worker_name,idle_time))
@@ -253,6 +254,16 @@ class Worker(Monque):
 
 
     def update_current_workers(self,last_update):
+        """
+        Update the entry in the 'current_workers' collection for this worker, so that it stays fresh.
+        The workers need to periodically update themselves to stay fresh in the collection,
+        otherwise they will be automatically removed from the collection (based on a TTL index)
+
+        The current workers record includes the current task (if any), but it does not always
+        stay current with the latest test -- the update frequency is potentially far lower than
+        the frequency of new tasks.
+        """
+
         now = time.time()
         elapsed = now - last_update
         if elapsed < self.current_workers_update_interval:
@@ -265,7 +276,7 @@ class Worker(Monque):
                    'host': socket.gethostname(),
                    'pid': os.getpid(),
                    'started_at': self.started_at,
-                   'updated_at': datetime.datetime.now(),
+                   'updated_at': datetime.datetime.utcnow(),
                    'idle_since': self.idle_since,
                    'current_task': { 'task': None,
                                      'started_at': None },
@@ -295,21 +306,27 @@ class Worker(Monque):
                 self.lock.wait()
 
         while self.running:
-            # Poll for the next task, then execute it
-            posted_task = self.get_next_task()
-            if posted_task:
-                self.execute_task(posted_task)
+            try:
+                # Poll for the next task, then execute it
+                posted_task = self.get_next_task()
+                if posted_task:
+                    self.execute_task(posted_task)
                 
-                # After executing each task, notfiy the lock
-                # to wake up the other threads
-                with self.lock:
-                    self.lock.notifyAll()
-
-            else:
-                # No task was available, so wait some time before asking for another
-                if self.running:
+                    # After executing each task, notfiy the lock
+                    # to wake up the other threads
                     with self.lock:
-                        self.lock.wait(self.wait_interval)
+                        self.lock.notifyAll()
+
+                else:
+                    # No task was available, so wait some time before asking for another
+                    if self.running:
+                        with self.lock:
+                            self.lock.wait(self.wait_interval)
+
+            except pymongo.errors.OperationFailure, ex:
+                self.logger.error("%s: failed in task_loop due to: %s" %
+                                  (self.worker_name,ex))
+                self.stop_running()
 
 
     def get_next_task(self):
@@ -382,7 +399,7 @@ class Worker(Monque):
         self.run_count += 1
 
         posted_task.mark_running()
-        self.current_task = (posted_task,datetime.datetime.now())
+        self.current_task = (posted_task,datetime.datetime.utcnow())
         self.idle_since = None
                                                 
         task = posted_task.task
@@ -404,7 +421,7 @@ class Worker(Monque):
 
         self.current_task = None
         self.run_time += ended - started
-        self.idle_since = datetime.datetime.now()
+        self.idle_since = datetime.datetime.utcnow()
 
 
     def store_task_result(self,posted_task,result):
@@ -431,7 +448,7 @@ class Worker(Monque):
 
         posted_task.doc['result'] = result
         posted_task.doc['status'] = 'completed'
-        posted_task.doc['completed_at'] = datetime.datetime.now()
+        posted_task.doc['completed_at'] = datetime.datetime.utcnow()
 
         posted_task.doc['worker'] = {
             'name': self.worker_name,
@@ -452,7 +469,7 @@ class Worker(Monque):
             'trace': traceback.format_exc(ex[2]),
         }
         posted_task.doc['status'] = 'failed'
-        posted_task.doc['completed_at'] = datetime.datetime.now()
+        posted_task.doc['completed_at'] = datetime.datetime.utcnow()
         
         posted_task.save_into(self.results_collection)
 
@@ -487,17 +504,22 @@ class Worker(Monque):
 
             tail = self.activity_log.find(query,
                                           tailable=True,
-                                          await_data=True)
+                                          await_data=False)
 
             # Tail the cursor until end is reached:
-            for new_task in tail:
-                last_id = new_task['_id']
+            try: 
+                for new_task in tail:
+                    last_id = new_task['_id']
 
-                # Just wait up the task loop:
-                with self.lock:
-                    self.lock.notifyAll()
+                    # Just wait up the task loop:
+                    with self.lock:
+                        self.lock.notifyAll()
+            except pymongo.errors.OperationFailure, ex:
+                self.logger.error("%s: failed in activity_loop due to: %s" %
+                                  (self.worker_name,ex))
+                self.stop_running()
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
 
     def check_control_state(self):
@@ -555,20 +577,26 @@ class Worker(Monque):
 
             tail = self.control_log.find(query,
                                          tailable=True,
-                                         await_data=True)
+                                         await_data=False)
 
             # Tail the cursor until end is reached:
-            for msg in tail:
-                last_id = msg['_id']
+            try:
+                for msg in tail:
+                    last_id = msg['_id']
 
-                self.logger.info("%s: control msg = %s" % (self.worker_name,msg))
+                    self.logger.info("%s: control msg = %s" % (self.worker_name,msg))
 
-                try:
-                    self.handle_control_msg(msg)
-                except:
-                    pass
+                    try:
+                        self.handle_control_msg(msg)
+                    except:
+                        pass
+            except pymongo.errors.OperationFailure, ex:
+                self.logger.error("%s: failed in control_loop due to: %s" %
+                                  (self.worker_name,ex))
+                self.stop_running()
 
-            time.sleep(0.1)
+
+            time.sleep(0.5)
 
 
     def handle_control_msg(self,msg):
@@ -607,12 +635,17 @@ class Worker(Monque):
 
     def stop(self):
         if self.running:
-            self.running = False
             self.logger.warning("%s: STOPPED -- issue the 'resume' command before starting workers" %
                                 (self.worker_name))
-            with self.lock:
-                self.lock.notifyAll()
-        
+
+            self.stop_running()
+
+
+    def stop_running(self):
+        self.running = False
+        with self.lock:
+            self.lock.notifyAll()
+
 
 class WorkerMain(object):
     # When worker module is instantiated as the main module,

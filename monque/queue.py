@@ -90,25 +90,34 @@ class Monque(object):
         self.logger.debug("init_collections: results_name=%s" % (results_name))
         self.logger.debug("init_collections: results_ttl=%s" % (results_ttl))
         self.results_collection = self.db[results_name]
-            
-        self.results_collection.ensure_index('_id',expireAfterSeconds=results_ttl)
-        self.results_collection.ensure_index([('class',pymongo.ASCENDING),
-                                              ('status',pymongo.ASCENDING),
-                                              ('submitted_at',pymongo.ASCENDING)])
-        self.results_collection.ensure_index([('class',pymongo.ASCENDING),
-                                              ('status',pymongo.ASCENDING),
-                                              ('completed_at',pymongo.ASCENDING)])
+
+        # This index ensures results expire:
+        self.results_collection.ensure_index([('completed_at',pymongo.ASCENDING)],
+                                             expireAfterSeconds=results_ttl)
+
+        # Are both of these indexes needed?
+        self.results_collection.ensure_index([('status',pymongo.ASCENDING)])
+        self.results_collection.ensure_index([('status',pymongo.ASCENDING),
+                                              ('queue',pymongo.ASCENDING)])
+
 
         # Current workers:
         workers_name = self.config.get('worker.collection_name','current_workers')
+        workers_ttl = 3 * int(self.config.get('worker.update_interval', 30))
         self.logger.debug("init_collections: workers_name=%s" % (workers_name))
         self.workers_collection = self.db[workers_name]
 
         self.workers_collection.ensure_index([('name',pymongo.ASCENDING)])
+
+        # This index ensures workers expire:
+        self.workers_collection.ensure_index([('updated_at',pymongo.ASCENDING)],
+                                             expireAfterSeconds=workers_ttl)
+
         self.workers_collection.ensure_index([('task._id',pymongo.ASCENDING)])
         self.workers_collection.ensure_index([('task.class',pymongo.ASCENDING),
                                               ('task.queue',pymongo.ASCENDING)])
         self.workers_collection.ensure_index([('task.queue',pymongo.ASCENDING)])
+
 
         # Activity log: a capped collection that is updated when there is activity on
         # a queue (new tasks). This is used by workers to tail the collection to quickly
@@ -346,10 +355,10 @@ class PostedTask(object):
         delay = self.config.get('delay')
         if delay:
             if isinstance(absolute,datetime.timedelta):
-                return datetime.datetime.now() + delay
+                return datetime.datetime.utcnow() + delay
             elif type(delay) == int or \
                     type(delay) == float:
-                return datetime.datetime.now() + datetime.timedelta(seconds=delay)
+                return datetime.datetime.utcnow() + datetime.timedelta(seconds=delay)
             raise ValueError("Unrecognized format of 'delay': %s" (delay))
 
         return None
@@ -373,7 +382,7 @@ class PostedTask(object):
     def mark_running(self):
         if self.doc:
             self.doc['status'] = 'running'
-            self.doc['started_at'] = datetime.datetime.now()
+            self.doc['started_at'] = datetime.datetime.utcnow()
 
         if self.collection and self.id:
             self.collection.find_and_modify(query={'_id':self.id},
@@ -400,8 +409,8 @@ class PostedTask(object):
 
                'constraints': { },
 
-               'created_at': datetime.datetime.now(),
-               'submitted_at': datetime.datetime.now(),
+               'created_at': datetime.datetime.utcnow(),
+               'submitted_at': datetime.datetime.utcnow(),
                'status': 'pending',
                }
 
@@ -454,7 +463,7 @@ class PostedTask(object):
                 else:
                     query['queue'] = {'$in':queue}
 
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         query['$or'] = [{'constraints.start_time':{'$exists':False}},
                         {'constraints.start_time':{'$lte':now}}]
 
@@ -462,7 +471,7 @@ class PostedTask(object):
         # which is the pre-cursor state to 'running', 
         # in which pre-run conditions are checked, etc
         update = {'$set':{'status':'taken',
-                          'taken_at':datetime.datetime.now()}}
+                          'taken_at':datetime.datetime.utcnow()}}
 
         found = collection.find_and_modify(query=query,
                                            update=update,
