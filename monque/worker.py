@@ -40,6 +40,12 @@ class Worker(Monque):
                  os.getpid(),
                  self.started_at.strftime('%Y%m%d-%H:%M'))
 
+        self.worker_id = {
+            'name': self.worker_name,
+            'host': socket.gethostname(),
+            'pid': os.getpid(),
+            }
+
         self.num_threads = kwargs.pop('num_threads',1)
         if self.num_threads < 1:
             raise RuntimeError("num_threads must be at least 1 (%s given)" % (self.num_threads))
@@ -368,7 +374,7 @@ class Worker(Monque):
 
         task_doc = PostedTask.get_next(collection=self.tasks_collection,
                                        queue=self.queues,
-                                       worker=self.worker_name)
+                                       worker=self.worker_id)
         if not task_doc:
             #self.logger.debug("get_next_task: got nothing")
             return None
@@ -480,12 +486,6 @@ class Worker(Monque):
         posted_task.doc['result'] = result
         posted_task.doc['status'] = 'completed'
         posted_task.doc['completed_at'] = datetime.datetime.utcnow()
-
-        posted_task.doc['worker'] = {
-            'name': self.worker_name,
-            'host': socket.gethostname(),
-            'pid': os.getpid(),
-            }
 
         posted_task.save_into(self.results_collection)
 

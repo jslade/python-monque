@@ -82,7 +82,7 @@ class Monque(object):
         self.tasks_collection.ensure_index([('class',pymongo.ASCENDING),
                                             ('status',pymongo.ASCENDING),
                                             ('submitted_at',pymongo.ASCENDING)])
-        self.tasks_collection.ensure_index([('taken_by',pymongo.ASCENDING)])
+        self.tasks_collection.ensure_index([('worker.name',pymongo.ASCENDING)])
 
         # Retired tasks: tasks + results (success or failure)
         # Uses a TTL index so that results will automatically be removed over time.
@@ -451,7 +451,7 @@ class PostedTask(object):
     def get_next(klass,**kwargs):
         collection = kwargs.pop('collection')
         queue = kwargs.pop('queue',None)
-        worker_name = kwargs.pop('worker',None)
+        worker = kwargs.pop('worker',None)
 
         # Set up the queury filters:
         query = {'status':'pending'}
@@ -474,9 +474,8 @@ class PostedTask(object):
         # in which pre-run conditions are checked, etc
         update = {'$set':{'status':'taken',
                           'taken_at':datetime.datetime.utcnow(),
-                          'taken_by':worker_name}}
-
-
+                          'worker': worker }}
+                                      
         found = collection.find_and_modify(query=query,
                                            update=update,
                                            new=True,

@@ -139,7 +139,7 @@ class WorkerOrphanage(object):
     def find_orphaned_tasks(self,worker_name=None):
         """
         Find orphaned tasks for the specific worker, or for all.
-        Orphaned tasks are identified by the taken_by field in the task,
+        Orphaned tasks are identified by the worker.name field in the task,
         and there not being a corresponding current worker entry for the given
         worker name
         """
@@ -157,7 +157,7 @@ class WorkerOrphanage(object):
                                 (worker_name))
             return None
 
-        return self.queue.tasks_collection.find({'taken_by':worker_name},
+        return self.queue.tasks_collection.find({'worker.name':worker_name},
                                                 sort=[('taken_at',pymongo.ASCENDING)])
 
         
@@ -166,9 +166,9 @@ class WorkerOrphanage(object):
         all_workers = self.queue.workers_collection.find({},fields={'name':True})
         worker_names = map(lambda w: w['name'],all_workers)
 
-        return self.queue.tasks_collection.find({'$and': [{'taken_by':{'$exists': True}},
-                                                          {'taken_by':{'$nin': worker_names}}] },
-                                                sort=[('taken_by',pymongo.ASCENDING),
+        return self.queue.tasks_collection.find({'$and': [{'worker':{'$exists': True}},
+                                                          {'worker.name':{'$nin': worker_names}}] },
+                                                sort=[('worker.name',pymongo.ASCENDING),
                                                       ('taken_at',pymongo.ASCENDING)])
 
 
@@ -178,7 +178,7 @@ class WorkerOrphanage(object):
         curr_group = None
 
         for task in all_tasks:
-            worker_name = task.get('taken_by','unknown')
+            worker_name = task.get('worker',{}).get('name','unknown')
             if worker_name != curr_name:
                 curr_name = worker_name
                 curr_group = []
