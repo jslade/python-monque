@@ -260,7 +260,7 @@ class Worker(Monque):
             try: idle_secs = idle_time.total_seconds()
             except:
                 # total_seconds new in python 2.7
-                idle_secs = (idle_tim.microseconds +
+                idle_secs = (idle_time.microseconds +
                              (idle_time.seconds + idle_time.days * 24 * 3600) * 10**6) / 10**6
 
             if idle_secs >= self.max_idle_time:
