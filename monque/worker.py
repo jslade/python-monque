@@ -41,6 +41,9 @@ class Worker(Monque):
                  os.getpid(),
                  self.started_at.strftime('%Y%m%d-%H:%M'))
 
+        self.num_threads = kwargs.pop('num_threads',1)
+        if self.num_threads < 1:
+            raise RuntimeError("num_threads must be at least 1 (%s given)" % (self.num_threads))
 
         self.queues = kwargs.pop('queues',None)
         self.includes = kwargs.pop('includes',[])
@@ -53,24 +56,16 @@ class Worker(Monque):
         self.paused = False
         self.throttled = False
 
-        # A thread to monitor new activity in the queues:
-        self.activity_thread = threading.Thread(target=self.activity_loop,name='activity_loop')
-        self.activity_thread.daemon = True
-
-        # A thread to consume control messages:
-        self.control_thread = threading.Thread(target=self.control_loop,name='control_loop')
-        self.control_thread.daemon = True
-
-        # A thread to consume and exec tasks:
-        self.task_thread = threading.Thread(target=self.task_loop,name='task_loop')
-        self.task_thread.daemon = True
-
         self.current_workers_update_interval = float(self.config.get('worker.update_interval',30))
         self.wait_interval = float(self.config.get('worker.wait_interval',10))
-        self.max_run_count = int(self.config.get('worker.max_run_count',0))
-        self.max_run_time = int(self.config.get('worker.max_run_time',0))
-        self.max_exception_count = int(self.config.get('worker.max_exception_count',0))
-        self.max_idle_time = int(self.config.get('worker.max_idle_time',0))
+        self.max_run_count = int(kwargs.pop('max_run_count',
+                                            self.config.get('worker.max_run_count',0)))
+        self.max_run_time = float(kwargs.pop('max_run_time',
+                                             self.config.get('worker.max_run_time',0)))
+        self.max_exception_count = int(kwargs.pop('max_exception_count',
+                                                  self.config.get('worker.max_exception_count',0)))
+        self.max_idle_time = float(kwargs.pop('max_idle_time',
+                                              self.config.get('worker.max_idle_time',0)))
 
         self.loaded_modules = {}
         self.known_tasks = {}
@@ -79,6 +74,21 @@ class Worker(Monque):
         self.run_count = 0
         self.run_time = 0
         self.exception_count = 0
+
+        # A thread to monitor new activity in the queues:
+        self.activity_thread = threading.Thread(target=self.activity_loop,name='activity_loop')
+        self.activity_thread.daemon = True
+
+        # A thread to consume control messages:
+        self.control_thread = threading.Thread(target=self.control_loop,name='control_loop')
+        self.control_thread.daemon = True
+
+        # Threads to consume tasks
+        self.task_threads = []
+        for i in range(self.num_threads):
+            task_thread = threading.Thread(target=self.task_loop,name='task_loop[%d]'%(i))
+            task_thread.daemon = True
+            self.task_threads.append(task_thread)
 
 
     def run(self):
@@ -92,7 +102,7 @@ class Worker(Monque):
         self.report_known_tasks()
 
         self.running = True
-        self.task_thread.start()
+        for th in self.task_threads: th.start()
         self.activity_thread.start()
         self.control_thread.start()
 
@@ -113,9 +123,10 @@ class Worker(Monque):
         with self.lock: self.lock.notifyAll()
         self.activity_thread.join()
 
-        self.logger.debug("%s: waiting for task_thread" % (self.worker_name))
-        with self.lock: self.lock.notifyAll()
-        self.task_thread.join()
+        self.logger.debug("%s: waiting for task_threads" % (self.worker_name))
+        for th in self.task_threads:
+            with self.lock: self.lock.notifyAll()
+            th.join()
 
         self.logger.info("%s: run() exiting" % (self.worker_name))
         
@@ -205,7 +216,7 @@ class Worker(Monque):
 
             # After waking up, check if timeout conditions are reached
             if self.check_timeout():
-                self.logger.warning("%s: run() finishing on timeout" % (self.worker_name))
+                self.logger.warning("%s: run() finishing on run limit" % (self.worker_name))
                 self.stop_running()
 
             # Periodically update the "current workers" record
@@ -221,7 +232,9 @@ class Worker(Monque):
         - max idle time
         """
 
-        current = self.current_task
+        with self.lock:
+            current = self.current_task
+            idle_since = self.idle_since
 
         if self.max_run_count and \
                 self.run_count >= self.max_run_count:
@@ -244,10 +257,16 @@ class Worker(Monque):
 
         if self.max_idle_time and not current:
             # Use current idle time, not total
-            idle_time = datetime.datetime.utcnow() - self.idle_since
-            if idle_time >= self.max_idle_time:
+            idle_time = datetime.datetime.utcnow() - idle_since
+            try: idle_secs = idle_time.total_seconds()
+            except:
+                # total_seconds new in python 2.7
+                idle_secs = (idle_tim.microseconds +
+                             (idle_time.seconds + idle_time.days * 24 * 3600) * 10**6) / 10**6
+
+            if idle_secs >= self.max_idle_time:
                 self.logger.warning("%s: worker reached max_idle_time (%s)" %
-                                    (self.worker_name,idle_time))
+                                    (self.worker_name,idle_secs))
                 return True
 
         return False
@@ -297,7 +316,8 @@ class Worker(Monque):
 
     def task_loop(self):
         """
-        Loop in which the worker waits for a task to be available, then executes it
+        Loop in which the worker waits for a task to be available, then executes it.
+        Multiple threads may be running the same loop.
         """
         self.logger.debug("%s: task_loop() start" % (self.worker_name))
 
@@ -326,7 +346,15 @@ class Worker(Monque):
             except pymongo.errors.OperationFailure, ex:
                 self.logger.error("%s: failed in task_loop due to: %s" %
                                   (self.worker_name,ex))
-                self.stop_running()
+                
+                # Remove this thread from the pool of task threads. If all the task
+                # threads are gone, then time to exit:
+                th = threading.current_thread()
+                if th in self.task_threads:
+                    self.task_threads.remove(th)
+                if not self.task_threads():
+                    self.logger.error("%s: All task threads are gone" % (self.worker_name))
+                    self.stop_running()
 
 
     def get_next_task(self):
@@ -396,11 +424,10 @@ class Worker(Monque):
         """
         Execute the task, and save the result.
         """
-        self.run_count += 1
-
         posted_task.mark_running()
-        self.current_task = (posted_task,datetime.datetime.utcnow())
-        self.idle_since = None
+        with self.lock:
+            self.current_task = (posted_task,datetime.datetime.utcnow())
+            self.idle_since = None
                                                 
         task = posted_task.task
         args = posted_task.args
@@ -416,12 +443,16 @@ class Worker(Monque):
             self.store_task_result(posted_task,result)
         except:
             ended = time.time()
-            self.exception_count += 1
             self.store_task_exception(posted_task,sys.exc_info())
 
-        self.current_task = None
-        self.run_time += ended - started
-        self.idle_since = datetime.datetime.utcnow()
+            with self.lock:
+                self.exception_count += 1
+
+        with self.lock:
+            self.run_count += 1
+            self.current_task = None
+            self.run_time += ended - started
+            self.idle_since = datetime.datetime.utcnow()
 
 
     def store_task_result(self,posted_task,result):
@@ -661,22 +692,44 @@ class WorkerMain(object):
         import optparse
         op = optparse.OptionParser()
         op.add_option('--name', type='string', dest='name')
-        op.add_option('--verbose', action='store_true', dest='verbose')
+        op.add_option('--threads', type='int', dest='thread_count',
+                      default=1)
         op.add_option('--queue', type='string',action='append', dest='queues')
+
         op.add_option('--include', type='string', action='append', dest='includes',
                       default=[])
         op.add_option('--include-dir', type='string', action='append', dest='include_dirs',
                       default=[])
+
+        op.add_option('--max-count', type='int', dest='max_run_count')
+        op.add_option('--max-time', type='float', dest='max_run_time')
+        op.add_option('--max-errors', type='int', dest='max_exception_count')
+        op.add_option('--max-idle', type='float', dest='max_idle_time')
+
+        op.add_option('--verbose', action='store_true', dest='verbose')
+
         op.add_option('--control', type='string', dest='control_msg')
 
         self.options, self.args = op.parse_args(args)
 
     def work(self):
-        worker = Worker(name=self.options.name,
-                        debug=self.options.verbose,
-                        include_dirs=self.options.include_dirs,
-                        includes=self.options.includes,
-                        queues=self.options.queues)
+        kwargs = { 'name': self.options.name,
+                   'num_threads': self.options.thread_count,
+                   'debug': self.options.verbose,
+                   'include_dirs': self.options.include_dirs,
+                   'includes': self.options.includes,
+                   'queues': self.options.queues }
+
+        if self.options.max_run_count:
+            kwargs['max_run_count'] = self.options.max_run_count
+        if self.options.max_run_time:
+            kwargs['max_run_time'] = self.options.max_run_time
+        if self.options.max_exception_count:
+            kwargs['max_exception_count'] = self.options.max_exception_count
+        if self.options.max_idle_time:
+            kwargs['max_idle_time'] = self.options.max_idle_time
+
+        worker = Worker(**kwargs)
         worker.run()
 
     def send_control_msg(self):
