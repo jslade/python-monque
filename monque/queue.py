@@ -476,7 +476,7 @@ class PostedTask(object):
         found = collection.find_and_modify(query=query,
                                            update=update,
                                            new=True,
-                                           sort={'_id':1})
+                                           sort=[('_id',pymongo.ASCENDING)])
 
         return found
 
