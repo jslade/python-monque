@@ -10,7 +10,6 @@ class WorkerMain(object):
         self.worker_class=worker_class
         self.parse_args(args)
 
-        import pdb; pdb.set_trace()
         if self.options.control_msg:
             self.send_control_msg()
 
