@@ -100,7 +100,7 @@ class Configuration(object):
             return klass().load(data)
         else:
             # No data found in the collection...
-            log = logging.getLogger()
+            log = logging.getLogger('monque')
             if 'log':
                 log.warning("'%s' collection is empty, no global config settings" % 
                             (collection_name))
