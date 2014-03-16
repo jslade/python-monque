@@ -200,6 +200,15 @@ class Worker(Monque):
 
 
     def main_loop(self):
+        try:
+            return self.main_loop_protected()
+        except:
+            ex = sys.exc_info()
+            sys.stderr.write("%s: Uncaught exception in main_loop:%s\n%s\n" %
+                             (self.worker_name,str(ex[1]),traceback.format_exc(ex[2])))
+            self.stop_running()
+
+    def main_loop_protected(self):
         """
         Main loop for the worker, runs in the 'main' thread.
         Just waits indefinitely while the task thread consumes tasks,
@@ -320,6 +329,15 @@ class Worker(Monque):
 
 
     def task_loop(self):
+        try:
+            return self.task_loop_protected()
+        except:
+            ex = sys.exc_info()
+            sys.stderr.write("%s: Uncaught exception in task_loop:%s\n%s\n" %
+                             (self.worker_name,str(ex[1]),traceback.format_exc(ex[2])))
+            self.stop_running()
+
+    def task_loop_protected(self):
         """
         Loop in which the worker waits for a task to be available, then executes it.
         Multiple threads may be running the same loop.
@@ -414,7 +432,7 @@ class Worker(Monque):
             return self.known_tasks[task_name]
 
         task_class = Task.find_task_class(class_name)
-        task = self.known_tasks[task_name] = task_class(monque=self)
+        task = self.known_tasks[task_name] = task_class(monque=self,logger=self.logger)
         return task
 
 
@@ -514,6 +532,15 @@ class Worker(Monque):
 
 
     def activity_loop(self):
+        try:
+            return self.activity_loop_protected()
+        except:
+            ex = sys.exc_info()
+            sys.stderr.write("%s: Uncaught exception in activity_loop:%s\n%s\n" %
+                             (self.worker_name,str(ex[1]),traceback.format_exc(ex[2])))
+            self.stop_running()
+
+    def activity_loop_protected(self):
         """
         In order to keep from activity polling the task queue (tasks collection),
         the activity_log is used. activity_log is a capped collection, which allows a tailable
@@ -586,6 +613,15 @@ class Worker(Monque):
 
 
     def control_loop(self):
+        try:
+            return self.control_loop_protected()
+        except:
+            ex = sys.exc_info()
+            sys.stderr.write("%s: Uncaught exception in control_loop:%s\n%s\n" %
+                             (self.worker_name,str(ex[1]),traceback.format_exc(ex[2])))
+            self.stop_running()
+
+    def control_loop_protected(self):
         """
         Wait for new messages on the control channel (pause, etc)
         """
