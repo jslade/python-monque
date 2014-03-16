@@ -420,7 +420,7 @@ class Worker(Monque):
 
     def can_run_task(self,posted_task):
         """
-        Check task constraints prior to running tgis task instance
+        Check task constraints prior to running this task instance
         """
         # TODO: not implemented...
         return True
@@ -434,12 +434,13 @@ class Worker(Monque):
         with self.lock:
             self.current_task = (posted_task,datetime.datetime.utcnow())
             self.idle_since = None
-                                                
+            counter = self.run_count
+
         task = posted_task.task
         args = posted_task.args
         kwargs = posted_task.kwargs
         self.logger.info("%s: run[%d]: %s args=%s kwargs=%s" %
-                         (self.worker_name,self.run_count,
+                         (self.worker_name,counter,
                           posted_task.name,args,kwargs))
 
         started = time.time()
@@ -449,7 +450,12 @@ class Worker(Monque):
             self.store_task_result(posted_task,result)
         except:
             ended = time.time()
-            self.store_task_exception(posted_task,sys.exc_info())
+            ex = sys.exc_info()
+            self.logger.warning("%s: run[%d]: Exception in %s: %s\n%s" %
+                                (self.worker_name,counter,
+                                 posted_task.name,
+                                 ex[1],traceback.format_exc(ex[2])))
+            self.store_task_exception(posted_task,ex)
 
             with self.lock:
                 self.exception_count += 1
@@ -617,10 +623,15 @@ class Worker(Monque):
 
                     self.logger.info("%s: control msg = %s" % (self.worker_name,msg))
 
-                    try:
-                        self.handle_control_msg(msg)
-                    except:
-                        pass
+                    with self.lock:
+                        try:
+                            self.handle_control_msg(msg)
+                        except:
+                            ex = sys.exc_info()
+                            self.logger.warning("%s: exception handling control msg: msg = %s\n%s\n%s" %
+                                                (self.worker_name,msg,
+                                                 str(ex[1]),traceback.format_exc(ex[2])))
+
             except pymongo.errors.OperationFailure, ex:
                 self.logger.error("%s: failed in control_loop due to: %s" %
                                   (self.worker_name,ex))
