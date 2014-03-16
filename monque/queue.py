@@ -77,10 +77,10 @@ class Monque(object):
         self.logger.debug("init_collections: tasks_name=%s" % (tasks_name))
         self.tasks_collection = self.db[tasks_name]
 
-        self.tasks_collection.ensure_index([('class',pymongo.ASCENDING),
-                                            ('status',pymongo.ASCENDING)])
-        self.tasks_collection.ensure_index([('class',pymongo.ASCENDING),
+        self.tasks_collection.ensure_index([('name',pymongo.ASCENDING),
+                                            ('class',pymongo.ASCENDING),
                                             ('status',pymongo.ASCENDING),
+                                            ('queue',pymongo.ASCENDING),
                                             ('submitted_at',pymongo.ASCENDING)])
         self.tasks_collection.ensure_index([('worker.name',pymongo.ASCENDING)])
 
