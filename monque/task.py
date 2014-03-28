@@ -63,7 +63,10 @@ class Task(object):
     def run(self, *args, **kwargs):
         """ This is to be implemented by subclasses """
         raise NotImplementedError()
-        
+
+    def is_run_by_worker(self):
+        from monque.worker import Worker
+        return isinstance(self.monque,Worker)
 
     def post(self,args=[],kwargs={},**config):
         """
