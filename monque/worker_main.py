@@ -85,7 +85,7 @@ class WorkerMain(object):
         Broadcast a control message to the configured queues (all by default)
         """
         worker = self.get_util_worker()
-        worker.send_control_msg(self.options.control_msg)
+        worker.send_control_msg(self.options.control_msg,queues=self.options.queues)
 
 
     def find_orphaned_tasks(self):
