@@ -230,7 +230,7 @@ class Worker(Monque):
 
             # After waking up, check if timeout conditions are reached
             if self.check_timeout():
-                self.logger.warning("%s: run() finishing on run limit" % (self.worker_name))
+                self.logger.info("%s: run() finishing on run limit" % (self.worker_name))
                 self.stop_running()
 
             # Periodically update the "current workers" record
@@ -252,8 +252,8 @@ class Worker(Monque):
 
         if self.max_run_count and \
                 self.run_count >= self.max_run_count:
-            self.logger.warning("%s: worker reached max_run_count (%d)" %
-                                (self.worker_name,self.run_count))
+            self.logger.info("%s: worker reached max_run_count (%d)" %
+                             (self.worker_name,self.run_count))
             return True
 
         if self.max_exception_count and \
@@ -265,8 +265,8 @@ class Worker(Monque):
         if self.max_run_time and current:
             # use total run time, not current
             if self.run_time >= self.max_run_time:
-                self.logger.warning("%s: worker reached max_run_time (%s)" %
-                                    (self.worker_name,self.run_time))
+                self.logger.info("%s: worker reached max_run_time (%s)" %
+                                 (self.worker_name,self.run_time))
                 return True
 
         if self.max_idle_time and not current:
@@ -279,8 +279,8 @@ class Worker(Monque):
                              (idle_time.seconds + idle_time.days * 24 * 3600) * 10**6) / 10**6
 
             if idle_secs >= self.max_idle_time:
-                self.logger.warning("%s: worker reached max_idle_time (%s)" %
-                                    (self.worker_name,idle_secs))
+                self.logger.info("%s: worker reached max_idle_time (%s)" %
+                                 (self.worker_name,idle_secs))
                 return True
 
         return False
@@ -700,21 +700,21 @@ class Worker(Monque):
     def pause(self):
         if not self.paused:
             self.paused = True
-            self.logger.warning("%s: PAUSED -- issue the 'resume' command to continue" % (self.worker_name))
+            self.logger.info("%s: PAUSED -- issue the 'resume' command to continue" % (self.worker_name))
             with self.lock:
                 self.lock.notifyAll()
 
     def resume(self):
         if self.paused:
             self.paused = False
-            self.logger.warning("%s: RESUMED" % (self.worker_name))
+            self.logger.info("%s: RESUMED" % (self.worker_name))
             with self.lock:
                 self.lock.notifyAll()
 
     def stop(self):
         if self.running:
-            self.logger.warning("%s: STOPPED -- issue the 'resume' command before starting workers" %
-                                (self.worker_name))
+            self.logger.info("%s: STOPPED -- issue the 'resume' command before starting workers" %
+                             (self.worker_name))
 
             self.stop_running()
 
