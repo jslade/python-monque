@@ -23,6 +23,8 @@ class Monque(object):
 
         self.config = kwargs.pop('config',Configuration(**kwargs).load_from_env())
 
+        self.connection = kwargs.pop('connection',None)
+
         self.setup_logging()
         self.connect()
 
@@ -45,28 +47,28 @@ class Monque(object):
         return self.logger
 
 
-    def connect(self):
+    def connect(self,init=False):
         self.logger.debug("Monque.connect()")
-        host = self.config.get('mongo.host','localhost')
-        if ':' in host:
-            host, port = host.split(':',1)
-            port = int(port)
-        else:
-            port = int(self.config.get('mongo.port',27017))
+        if not self.connection:
+            host = self.config.get('mongo.host','localhost')
+            if ':' in host:
+                host, port = host.split(':',1)
+                port = int(port)
+            else:
+                port = int(self.config.get('mongo.port',27017))
+            self.connection = pymongo.MongoClient(host,port)
 
         db_name = self.config.get('mongo.db','monque')
-
-        self.connection = pymongo.MongoClient(host,port)
         self.db = self.connection[db_name]
 
         self.global_config = Configuration.get_global(self.db,
                                                       self.config.get('mongo.config','config'))
         self.config.parent = self.global_config
 
-        self.init_collections()
+        self.get_collections(init=init)
 
-
-    def init_collections(self):
+        
+    def get_collections(self,init=False):
         """
         Setup the various collections used to manage tasks and record results.
         """
@@ -75,79 +77,108 @@ class Monque(object):
         # Nothing special about this collection
         tasks_name = self.config.get('tasks.collection_name','tasks')
         self.logger.debug("init_collections: tasks_name=%s" % (tasks_name))
+        if init or tasks_name not in self.db.collection_names():
+            self.init_tasks_collection(tasks_name)
         self.tasks_collection = self.db[tasks_name]
-
-        self.tasks_collection.ensure_index([('name',pymongo.ASCENDING),
-                                            ('class',pymongo.ASCENDING),
-                                            ('status',pymongo.ASCENDING),
-                                            ('queue',pymongo.ASCENDING),
-                                            ('submitted_at',pymongo.ASCENDING)])
-        self.tasks_collection.ensure_index([('worker.name',pymongo.ASCENDING)])
 
         # Retired tasks: tasks + results (success or failure)
         # Uses a TTL index so that results will automatically be removed over time.
         results_name = self.config.get('results.collection_name','results')
-        results_ttl = int(self.config.get('results.ttl', 3600 * 24 * 7)) # 7 days default
         self.logger.debug("init_collections: results_name=%s" % (results_name))
-        self.logger.debug("init_collections: results_ttl=%s" % (results_ttl))
+        if init or results_name not in self.db.collection_names():
+            self.init_results_collection(results_name)
         self.results_collection = self.db[results_name]
-
-        # This index ensures results expire:
-        self.results_collection.ensure_index([('completed_at',pymongo.ASCENDING)],
-                                             expireAfterSeconds=results_ttl)
-
-        # Are both of these indexes needed?
-        self.results_collection.ensure_index([('status',pymongo.ASCENDING)])
-        self.results_collection.ensure_index([('status',pymongo.ASCENDING),
-                                              ('queue',pymongo.ASCENDING)])
-
 
         # Current workers:
         workers_name = self.config.get('worker.collection_name','current_workers')
-        workers_ttl = 3 * int(self.config.get('worker.update_interval', 30))
         self.logger.debug("init_collections: workers_name=%s" % (workers_name))
+        if init or workers_name not in self.db.collection_names():
+            self.init_workers_collection(workers_name)
         self.workers_collection = self.db[workers_name]
-
-        self.workers_collection.ensure_index([('name',pymongo.ASCENDING)])
-
-        # This index ensures workers expire:
-        self.workers_collection.ensure_index([('updated_at',pymongo.ASCENDING)],
-                                             expireAfterSeconds=workers_ttl)
-
-        self.workers_collection.ensure_index([('task._id',pymongo.ASCENDING)])
-        self.workers_collection.ensure_index([('task.class',pymongo.ASCENDING),
-                                              ('task.queue',pymongo.ASCENDING)])
-        self.workers_collection.ensure_index([('task.queue',pymongo.ASCENDING)])
-
-
+            
         # Activity log: a capped collection that is updated when there is activity on
         # a queue (new tasks). This is used by workers to tail the collection to quickly
         # discover new tasks, without having to poll.
         activity_name = self.config.get('activity.collection_name','activity_log')
-        activity_size = int(self.config.get('activity.collection_size',100e+6)) # default: 100M
-        try:
-            self.activity_log = self.db.create_collection(activity_name,
-                                                          size=activity_size,
-                                                          capped=True)
-        except pymongo.errors.CollectionInvalid:
-            self.activity_log = self.db[activity_name]
-                                
-        
+        if init or activity_name not in self.db.collection_names():
+            self.init_activity_collection(activity_name)
+        self.activity_log = self.db[activity_name]
+                                   
         # Control state: current control settings
         control_name = self.config.get('control.collection_name','control_state')
+        if init or control_name not in self.db.collection_names():
+            self.init_control_state_collection(control_name)
         self.control_collection = self.db[control_name]
-        self.control_collection.ensure_index([('name',pymongo.ASCENDING)])
 
         # Control log: a capped collection used to broadcast control messages to workers
         control_log_name = self.config.get('control_log.collection_name','control_log')
+        if init or control_log_name not in self.db.collection_names():
+            self.init_control_log_colleciton(control_log_name)
+        self.control_log = self.db[control_log_name]
+
+
+    def init_tasks_collection(self,collection_name):
+        collection = self.db[collection_name]
+        
+        collection.ensure_index([('name',pymongo.ASCENDING),
+                                 ('class',pymongo.ASCENDING),
+                                 ('status',pymongo.ASCENDING),
+                                 ('queue',pymongo.ASCENDING),
+                                 ('submitted_at',pymongo.ASCENDING)])
+        collection.ensure_index([('worker.name',pymongo.ASCENDING)])
+
+    def init_results_collection(self,collection_name):
+        collection = self.db[collection_name]
+
+        results_ttl = int(self.config.get('results.ttl', 3600 * 24 * 7)) # 7 days default
+        self.logger.debug("init_results_collection: results_ttl=%s" % (results_ttl))
+
+        # This index ensures results expire:
+        collection.ensure_index([('completed_at',pymongo.ASCENDING)],
+                                expireAfterSeconds=results_ttl)
+
+        # Are both of these indexes needed?
+        collection.ensure_index([('status',pymongo.ASCENDING)])
+        collection.ensure_index([('status',pymongo.ASCENDING),
+                                 ('queue',pymongo.ASCENDING)])
+
+    def init_workers_collection(self,collection_name):
+        collection = self.db[collection_name]
+
+        collection.ensure_index([('name',pymongo.ASCENDING)])
+
+        # This index ensures workers expire:
+        workers_ttl = 3 * int(self.config.get('worker.update_interval', 30))
+        collection.ensure_index([('updated_at',pymongo.ASCENDING)],
+                                expireAfterSeconds=workers_ttl)
+
+        collection.ensure_index([('task._id',pymongo.ASCENDING)])
+        collection.ensure_index([('task.class',pymongo.ASCENDING),
+                                 ('task.queue',pymongo.ASCENDING)])
+        collection.ensure_index([('task.queue',pymongo.ASCENDING)])
+
+    def init_activity_collection(self,collection_name):
+        activity_size = int(self.config.get('activity.collection_size',100e+6)) # default: 100M
+        try:
+            self.db.create_collection(collection_name,
+                                      size=activity_size,
+                                      capped=True)
+        except pymongo.errors.CollectionInvalid:
+            pass # TODO: Should check if existing colleciton is the right size? And maybe drop it?
+
+    def init_control_state_collection(self,collection_name):
+        collection = self.db[collection_name]
+        
+        collection.ensure_index([('name',pymongo.ASCENDING)])
+
+    def init_control_log_collection(self,collection_name):
         control_log_size = int(self.config.get('control_log.collection_size',100e+6)) # default: 100M
         try:
-            self.control_log = self.db.create_collection(control_log_name,
-                                                         size=control_log_size,
-                                                         capped=True)
+            self.db.create_collection(collection_name,
+                                      size=control_log_size,
+                                      capped=True)
         except pymongo.errors.CollectionInvalid:
-            self.control_log = self.db[control_log_name]
-
+            pass # TODO: Should check if existing colleciton is the right size? And maybe drop it?
 
 
     def post(self,task,args,kwargs,config):
@@ -193,7 +224,7 @@ class Monque(object):
         return True
 
 
-    def send_control_msg(self,command):
+    def send_control_msg(self,command,queues=None):
         """
         This is intended to be used from WorkerMain to broadcast control messages to 
         all workers (or all workers for specific queues).
@@ -201,8 +232,8 @@ class Monque(object):
         It can also be used from a client, however, to control the state of the queues it 
         is connected to.
         """
-
-        queues = self.queues or ['*']
+        
+        if not queues: queues = ['*']
         for queue in queues:
             msg = { 'command': command, 'queue': queue }
             self.logger.warning("Sending control message: %s" % (msg))
@@ -309,7 +340,110 @@ class Monque(object):
 
         return self.results_collection.find(query).count()
 
-    
+
+    def pause_queues(self,queue=None,queues=None):
+        """
+        Pause one or more queues (or globally).
+        TODO: Should this be available in the base Monque class?
+        """
+        queue_list = ['*']
+        if queue:
+            queue_list = [queue]
+        else:
+            queue_list = queues
+
+        self.send_control_msg('pause',queue_list)
+
+
+    def stop_queues(self,queue=None,queues=None):
+        """
+        Stop one or more queues (or globally).
+        TODO: Should this be available in the base Monque class?
+        """
+        queue_list = ['*']
+        if queue:
+            queue_list = [queue]
+        else:
+            queue_list = queues
+
+        self.send_control_msg('stop',queue_list)
+
+
+    def resume_queues(self,queue=None,queues=None):
+        """
+        Resume one or more queues (or globally).
+        TODO: Should this be available in the base Monque class?
+        """
+        queue_list = ['*']
+        if queue:
+            queue_list = [queue]
+        else:
+            queue_list = queues
+
+        self.send_control_msg('resume',queue_list)
+
+
+    def are_queues_paused(self,queue=None,queues=None):
+        """
+        Query the control_state collection to see if this queue is paused or
+        there is a global pause (all workers remain running but don't start new tasks)
+        Also returns true if the queue / global is 'stopped' (all workers shut down)
+        """
+        query = {'name':'paused','paused':True}
+
+        queue_list = ['*']
+        if queue:
+            queue_list.append(queue)
+        elif queues:
+            queue_list.extend(queues)
+
+        if len(queue_list) > 1:
+            query['queue'] = {'$in':queue_list}
+        else:
+            query['queue'] = queue_list[0]
+
+        if self.control_collection.find(query).count():
+            return True
+        return self.is_stopped(queue=queue,queues=queues)
+
+    def get_all_paused_queues(self):
+        """
+        Returns a list of all the queues that are paused. May include '*' if 
+        there is a global pause
+        """
+
+        query = {'name':'paused','paused':True}
+        return [c['queue'] for c in self.control_collection.find(query)]
+
+    def are_queues_stopped(self,queue=None,queues=None):
+        """
+        Query the control_state collection to see if this queue is stopped 
+        (all workers told to shut down)
+        """
+        query = {'name':'stopped','stopped':True}
+
+        queue_list = ['*']
+        if queue:
+            queue_list.append(queue)
+        elif queues:
+            queue_list.extend(queues)
+
+        if len(queue_list) > 1:
+            query['queue'] = {'$in':queue_list}
+        else:
+            query['queue'] = queue_list[0]
+
+        return self.control_collection.find(query).count() > 0
+
+    def get_all_stopped_queues(self):
+        """
+        Returns a list of all the queues that are stopped. May include '*' if 
+        there is a global stop
+        """
+
+        query = {'name':'stopped','stopped':True}
+        return [c['queue'] for c in self.control_collection.find(query)]
+
 
 class PostedTask(object):
     """
