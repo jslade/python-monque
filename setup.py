@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='monque',
-      version='0.3.0',
+      version='0.4.0',
       description='Persistent task queue built on top of MongoDB',
       url='http://github.com/jslade/python-monque',
       author='Jeremy Slade',
