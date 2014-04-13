@@ -87,6 +87,8 @@ class Configuration(object):
 
         return self
 
+
+    did_log_global = False
         
     @classmethod
     def get_global(klass,db,collection_name='config'):
@@ -101,9 +103,10 @@ class Configuration(object):
         else:
             # No data found in the collection...
             log = logging.getLogger('monque')
-            if 'log':
-                log.warning("'%s' collection is empty, no global config settings" % 
-                            (collection_name))
+            if 'log' and not klass.did_log_global:
+                log.debug("'%s' collection is empty, no global config settings" % 
+                          (collection_name))
+                klass.did_log_global = True
             return klass()
 
 
