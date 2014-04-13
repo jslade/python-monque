@@ -113,18 +113,17 @@ class Monque(object):
         # Control log: a capped collection used to broadcast control messages to workers
         control_log_name = self.config.get('control_log.collection_name','control_log')
         if init or control_log_name not in self.db.collection_names():
-            self.init_control_log_colleciton(control_log_name)
+            self.init_control_log_collection(control_log_name)
         self.control_log = self.db[control_log_name]
 
 
     def init_tasks_collection(self,collection_name):
         collection = self.db[collection_name]
         
-        collection.ensure_index([('name',pymongo.ASCENDING),
-                                 ('class',pymongo.ASCENDING),
-                                 ('status',pymongo.ASCENDING),
-                                 ('queue',pymongo.ASCENDING),
-                                 ('submitted_at',pymongo.ASCENDING)])
+        collection.ensure_index([('name',pymongo.ASCENDING)])
+        collection.ensure_index([('status',pymongo.ASCENDING),
+                                 ('queue',pymongo.ASCENDING)])
+        collection.ensure_index([('constraints.priority',pymongo.DESCENDING)])
         collection.ensure_index([('worker.name',pymongo.ASCENDING)])
 
     def init_results_collection(self,collection_name):
@@ -468,6 +467,8 @@ class PostedTask(object):
 
         self.queue = self.config.get('queue','default')
 
+        self.priority = self.config.get('priority',None)
+
         self.start_time = self.get_start_time()
         self.result = None
 
@@ -550,6 +551,8 @@ class PostedTask(object):
                }
 
         # Add constraints:
+        if self.priority is not None:
+            doc['constraints']['priority'] = self.priority
         if self.start_time:
             doc['constraints']['start_time'] = self.start_time
         if self.max_in_queue:
@@ -613,7 +616,8 @@ class PostedTask(object):
         found = collection.find_and_modify(query=query,
                                            update=update,
                                            new=True,
-                                           sort=[('_id',pymongo.ASCENDING)])
+                                           sort=[('constraints.priority',pymongo.DESCENDING),
+                                                 ('_id',pymongo.ASCENDING)])
 
         return found
 
